@@ -1,0 +1,10 @@
+name: OrynPlugins
+description: $description
+version: '${version}'
+
+main: net.oryn.mc.orynPlugins.OrynPlugins
+paperPluginLoader: net.oryn.mc.orynPlugins.OrynPluginsLoader
+api-version: '1.21.1'
+load: STARTUP
+
+authors: [ Fahry-a ]
