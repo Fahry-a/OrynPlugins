@@ -1,6 +1,6 @@
 # Module Development Guide
 
-Guide untuk membuat module baru untuk OrynPlugins v1.0.1.
+Guide untuk membuat module baru untuk OrynPlugins v1.1.0.
 
 ## Apa itu Module?
 
@@ -38,7 +38,7 @@ repositories {
 
 dependencies {
     compileOnly("io.papermc.paper:paper-api:1.21.1-R0.1-SNAPSHOT")
-    compileOnly("net.oryn.mc:orynplugins:1.0.1")
+    compileOnly("net.oryn.mc:orynplugins:1.1.0")
 }
 
 java {
@@ -66,55 +66,75 @@ tasks {
 
 ### 2. Implement `OrynModule` Interface
 
+#### Option A: Using @ModuleInfo Annotation (Recommended)
+
 ```java
 package com.example.mymodule;
 
 import net.oryn.mc.orynPlugins.module.ModuleContext;
+import net.oryn.mc.orynPlugins.module.ModuleInfo;
 import net.oryn.mc.orynPlugins.module.OrynModule;
 
 import org.bukkit.command.CommandSender;
+import org.bukkit.event.EventHandler;
+import org.bukkit.event.Listener;
+import org.bukkit.event.player.PlayerJoinEvent;
 
 import java.util.List;
 
-public class MyModule implements OrynModule {
+@ModuleInfo(
+    name = "mymodule",
+    version = "1.0.0",
+    description = "My custom module",
+    author = "YourName",
+    dependencies = {"tunnel"},
+    softDependencies = {"vault"}
+)
+public class MyModule implements OrynModule, Listener {
 
     private ModuleContext context;
-
-    @Override
-    public String getName() {
-        return "mymodule";
-    }
-
-    @Override
-    public String getVersion() {
-        return "1.0";
-    }
-
-    @Override
-    public String getDescription() {
-        return "My custom module";
-    }
-
-    @Override
-    public String getAuthor() {
-        return "YourName";
-    }
 
     @Override
     public boolean onLoad(ModuleContext context) {
         this.context = context;
         context.getLogger().info("MyModule loaded!");
-        return true; // Return false to abort loading
+        
+        // Register events automatically
+        context.registerEvents(this);
+        
+        return true;
     }
 
     @Override
     public void onEnable() {
+        // Run async task
+        context.runTaskAsync(() -> {
+            context.getLogger().info("Running async task!");
+        });
+
+        // Run delayed task (5 seconds = 100 ticks)
+        context.runTaskLater(() -> {
+            context.getLogger().info("Delayed task executed!");
+        }, 100);
+
         context.getLogger().info("MyModule enabled!");
     }
 
     @Override
     public void onDisable() {
         context.getLogger().info("MyModule disabled!");
+    }
+
+    @Override
+    public void onReload() {
+        // Custom reload behavior (optional)
+        context.getConfigManager().reload();
+        context.getLogger().info("Config reloaded!");
+    }
+
+    @EventHandler
+    public void onPlayerJoin(PlayerJoinEvent event) {
+        event.getPlayer().sendMessage("Welcome!");
     }
 
     @Override
@@ -127,6 +147,38 @@ public class MyModule implements OrynModule {
     public List<String> onTabComplete(CommandSender sender, String label, String[] args) {
         return List.of();
     }
+}
+```
+
+#### Option B: Implementing Getter Methods (Legacy)
+
+```java
+public class MyModule implements OrynModule {
+
+    @Override
+    public String getName() { return "mymodule"; }
+
+    @Override
+    public String getVersion() { return "1.0.0"; }
+
+    @Override
+    public String getDescription() { return "My custom module"; }
+
+    @Override
+    public String getAuthor() { return "YourName"; }
+
+    @Override
+    public List<String> getDependencies() { return List.of("tunnel"); }
+
+    @Override
+    public List<String> getSoftDependencies() { return List.of("vault"); }
+
+    @Override
+    public boolean onLoad(ModuleContext context) {
+        context.getLogger().info("MyModule loaded!");
+        return true;
+    }
+    // ... other methods
 }
 ```
 
@@ -147,30 +199,80 @@ Jika ingin publish module untuk akses dari project lain:
 
 ## Module API Reference
 
+### `@ModuleInfo` Annotation
+
+Annotation untuk metadata module (alternatif getter methods):
+
+| Attribute | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `name` | `String` | required | Module name (unique, lowercase) |
+| `version` | `String` | required | Module version |
+| `description` | `String` | `""` | Module description |
+| `author` | `String` | `"Unknown"` | Author name |
+| `dependencies` | `String[]` | `{}` | Hard dependencies |
+| `softDependencies` | `String[]` | `{}` | Soft dependencies |
+
 ### `OrynModule` Interface
 
-| Method | Return | Description |
-|--------|--------|-------------|
-| `getName()` | `String` | Nama module (unique, lowercase) |
-| `getVersion()` | `String` | Version string |
-| `getDescription()` | `String` | Deskripsi singkat |
-| `getAuthor()` | `String` | Author name (default: "Unknown") |
-| `getDependencies()` | `List<String>` | Hard dependencies (default: empty) |
-| `getSoftDependencies()` | `List<String>` | Soft dependencies (default: empty) |
-| `onLoad(ModuleContext)` | `boolean` | Called when module is loaded. Return `false` to abort |
-| `onEnable()` | `void` | Called when module is enabled |
-| `onDisable()` | `void` | Called when module is disabled |
-| `onCommand(sender, label, args)` | `boolean` | Handle command dari `/oryn module <name>` |
-| `onTabComplete(sender, label, args)` | `List<String>` | Tab completion untuk command |
+| Method | Return | Default | Description |
+|--------|--------|---------|-------------|
+| `getName()` | `String` | `null` | Module name (required if no @ModuleInfo) |
+| `getVersion()` | `String` | `"1.0.0"` | Version string |
+| `getDescription()` | `String` | `""` | Description |
+| `getAuthor()` | `String` | `"Unknown"` | Author name |
+| `getDependencies()` | `List<String>` | `[]` | Hard dependencies |
+| `getSoftDependencies()` | `List<String>` | `[]` | Soft dependencies |
+| `onLoad(ModuleContext)` | `boolean` | required | Called when loaded. Return false to abort |
+| `onEnable()` | `void` | empty | Called when enabled |
+| `onDisable()` | `void` | empty | Called when disabled |
+| `onReload()` | `void` | calls disable+enable | Called on reload |
+| `onCommand(sender, label, args)` | `boolean` | `false` | Handle command |
+| `onTabComplete(sender, label, args)` | `List<String>` | `[]` | Tab completion |
 
 ### `ModuleContext` Class
 
+#### Core References
 | Method | Description |
 |--------|-------------|
 | `getHostPlugin()` | Instance OrynPlugins (`JavaPlugin`) |
 | `getModuleDataFolder()` | Folder data module (`plugins/OrynPlugins/modules/<name>/`) |
 | `getLogger()` | Per-module logger dengan prefix `[<name>]` |
 | `getConfigManager()` | `ModuleConfigManager` instance |
+
+#### Server Utilities
+| Method | Description |
+|--------|-------------|
+| `getServer()` | Bukkit Server instance |
+| `getPluginManager()` | Plugin Manager |
+| `getScheduler()` | Bukkit Scheduler |
+
+#### Event Helpers
+| Method | Description |
+|--------|-------------|
+| `registerEvents(Listener)` | Register event listener |
+| `unregisterEvents(Listener)` | Unregister event listener |
+
+#### Scheduler Helpers
+| Method | Description |
+|--------|-------------|
+| `runTask(Runnable)` | Run sync task on main thread |
+| `runTaskAsync(Runnable)` | Run async task (off main thread) |
+| `runTaskLater(Runnable, ticks)` | Run sync task after delay |
+| `runTaskLaterAsync(Runnable, ticks)` | Run async task after delay |
+| `runTaskTimer(Runnable, delay, period)` | Run sync task repeatedly |
+| `runTaskTimerAsync(Runnable, delay, period)` | Run async task repeatedly |
+
+#### Player Utilities
+| Method | Description |
+|--------|-------------|
+| `getPlayer(String)` | Get online player by name |
+| `getPlayer(UUID)` | Get online player by UUID |
+| `getOnlinePlayers()` | Get all online players |
+
+#### Other Utilities
+| Method | Description |
+|--------|-------------|
+| `getCommand(String)` | Get registered plugin command |
 
 ### `ModuleStatus` Enum
 
@@ -230,17 +332,23 @@ Module ClassLoader (module JAR)
    ├── Read Main-Class from MANIFEST.MF
    ├── Instantiate class
    ├── Cast to OrynModule
+   ├── Read @ModuleInfo annotation (if present)
    ├── Check name collision
    └── Call onLoad(context) → boolean
 
 3. ModuleLoader.enableAllModules()
    └── Call onEnable() for each LOADED module
 
-4. [Server Shutdown]
+4. [Runtime]
+   └── Commands, events, scheduled tasks...
 
-5. ModuleLoader.disableAllModules()
-   ├── Call onDisable() for each ENABLED module
-   └── Close classloaders
+5. [Reload Request]
+   └── Call onReload() (default: onDisable + onEnable)
+
+6. [Server Shutdown]
+   └── ModuleLoader.disableAllModules()
+       ├── Call onDisable() for each ENABLED module
+       └── Close classloaders
 ```
 
 ## Per-Module Logger

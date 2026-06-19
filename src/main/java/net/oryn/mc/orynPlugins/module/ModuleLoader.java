@@ -79,9 +79,11 @@ public class ModuleLoader {
                 throw new IllegalStateException("Main class does not implement OrynModule: " + mainClassName);
             }
 
-            String moduleName = module.getName();
+            // Get module name from @ModuleInfo annotation or getName() method
+            String moduleName = getModuleName(module, mainClass);
             if (moduleName == null || moduleName.isBlank()) {
-                throw new IllegalStateException("Module name cannot be null or empty: " + mainClassName);
+                throw new IllegalStateException("Module name cannot be null or empty: " + mainClassName 
+                    + ". Use @ModuleInfo annotation or implement getName()");
             }
 
             if (modules.containsKey(moduleName.toLowerCase())) {
@@ -99,7 +101,10 @@ public class ModuleLoader {
 
             ModuleContext context = new ModuleContext(hostPlugin, moduleDataFolder, moduleLogger);
 
-            hostPlugin.getLogger().info("Loading module: " + moduleName + " v" + module.getVersion());
+            // Get version from @ModuleInfo annotation or getVersion() method
+            String moduleVersion = getModuleVersion(module, mainClass);
+
+            hostPlugin.getLogger().info("Loading module: " + moduleName + " v" + moduleVersion);
             long startTime = System.currentTimeMillis();
             boolean loadSuccess = module.onLoad(context);
             long loadTime = System.currentTimeMillis() - startTime;
@@ -124,6 +129,76 @@ public class ModuleLoader {
             }
             throw e;
         }
+    }
+
+    /**
+     * Get module name from @ModuleInfo annotation or getName() method
+     */
+    private String getModuleName(OrynModule module, Class<?> mainClass) {
+        // Check @ModuleInfo annotation first
+        ModuleInfo annotation = mainClass.getAnnotation(ModuleInfo.class);
+        if (annotation != null && !annotation.name().isEmpty()) {
+            return annotation.name();
+        }
+        // Fall back to getName() method
+        return module.getName();
+    }
+
+    /**
+     * Get module version from @ModuleInfo annotation or getVersion() method
+     */
+    private String getModuleVersion(OrynModule module, Class<?> mainClass) {
+        // Check @ModuleInfo annotation first
+        ModuleInfo annotation = mainClass.getAnnotation(ModuleInfo.class);
+        if (annotation != null && !annotation.version().isEmpty()) {
+            return annotation.version();
+        }
+        // Fall back to getVersion() method
+        return module.getVersion();
+    }
+
+    /**
+     * Get module description from @ModuleInfo annotation or getDescription() method
+     */
+    private String getModuleDescription(OrynModule module, Class<?> mainClass) {
+        ModuleInfo annotation = mainClass.getAnnotation(ModuleInfo.class);
+        if (annotation != null && !annotation.description().isEmpty()) {
+            return annotation.description();
+        }
+        return module.getDescription();
+    }
+
+    /**
+     * Get module author from @ModuleInfo annotation or getAuthor() method
+     */
+    private String getModuleAuthor(OrynModule module, Class<?> mainClass) {
+        ModuleInfo annotation = mainClass.getAnnotation(ModuleInfo.class);
+        if (annotation != null && !annotation.author().equals("Unknown")) {
+            return annotation.author();
+        }
+        return module.getAuthor();
+    }
+
+    /**
+     * Get module dependencies from @ModuleInfo annotation or getDependencies() method
+     */
+    private java.util.List<String> getModuleDependencies(OrynModule module, Class<?> mainClass) {
+        ModuleInfo annotation = mainClass.getAnnotation(ModuleInfo.class);
+        if (annotation != null && annotation.dependencies().length > 0) {
+            return java.util.Arrays.asList(annotation.dependencies());
+        }
+        return module.getDependencies();
+    }
+
+    /**
+     * Get module soft dependencies from @ModuleInfo annotation or getSoftDependencies() method
+     */
+    private java.util.List<String> getModuleSoftDependencies(OrynModule module, Class<?> mainClass) {
+        ModuleInfo annotation = mainClass.getAnnotation(ModuleInfo.class);
+        if (annotation != null && annotation.softDependencies().length > 0) {
+            return java.util.Arrays.asList(annotation.softDependencies());
+        }
+        return module.getSoftDependencies();
     }
 
     public void enableAllModules() {
@@ -204,6 +279,36 @@ public class ModuleLoader {
             return true;
         } catch (Exception e) {
             hostPlugin.getLogger().log(Level.SEVERE, "Failed to enable module: " + name, e);
+            moduleStatuses.put(name.toLowerCase(), ModuleStatus.ERRORED);
+            return false;
+        }
+    }
+
+    /**
+     * Reload a module by calling its onReload() method.
+     * Default implementation calls onDisable() then onEnable().
+     * 
+     * @param name Module name
+     * @return true if reload succeeded
+     */
+    public boolean reloadModule(String name) {
+        OrynModule module = modules.get(name.toLowerCase());
+        if (module == null) {
+            return false;
+        }
+
+        ModuleStatus status = moduleStatuses.get(name.toLowerCase());
+        if (status != ModuleStatus.ENABLED) {
+            return false;
+        }
+
+        try {
+            hostPlugin.getLogger().info("Reloading module: " + name);
+            module.onReload();
+            moduleStatuses.put(name.toLowerCase(), ModuleStatus.ENABLED);
+            return true;
+        } catch (Exception e) {
+            hostPlugin.getLogger().log(Level.SEVERE, "Failed to reload module: " + name, e);
             moduleStatuses.put(name.toLowerCase(), ModuleStatus.ERRORED);
             return false;
         }

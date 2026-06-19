@@ -33,8 +33,8 @@ Module host plugin for Oryn server. Loads and manages modules from `plugins/Oryn
 | `/oryn module info <name>` | Show module details (author, deps, status) |
 | `/oryn module enable <name>` | Enable a module |
 | `/oryn module disable <name>` | Disable a module |
-| `/oryn module reload <name>` | Reload a module (disable + enable) |
-| `/oryn module <name> <args>` | Execute module command |
+| `/oryn module reload <name>` | Reload a module (calls onReload) |
+| `/oryn modules <name> <args>` | Execute module command |
 | `/oryn help` | Show help |
 
 ## Permissions
@@ -90,18 +90,18 @@ repositories {
 }
 
 dependencies {
-    compileOnly("net.oryn.mc:orynplugins:1.0.1")
+    compileOnly("net.oryn.mc:orynplugins:1.1.0")
 }
 ```
 
 ```java
+@ModuleInfo(
+    name = "mymodule",
+    version = "1.0.0",
+    description = "My awesome module",
+    author = "YourName"
+)
 public class MyModule implements OrynModule {
-    @Override
-    public String getName() { return "mymodule"; }
-
-    @Override
-    public String getAuthor() { return "YourName"; }
-
     @Override
     public boolean onLoad(ModuleContext context) {
         context.getLogger().info("MyModule loaded!");
@@ -130,7 +130,7 @@ repositories {
 }
 
 dependencies {
-    compileOnly("net.oryn.mc:orynplugins:1.0.1")
+    compileOnly("net.oryn.mc:orynplugins:1.1.0")
 }
 ```
 
@@ -145,7 +145,7 @@ dependencies {
 <dependency>
     <groupId>net.oryn.mc</groupId>
     <artifactId>orynplugins</artifactId>
-    <version>1.0.1</version>
+    <version>1.1.0</version>
     <scope>provided</scope>
 </dependency>
 ```
@@ -182,7 +182,7 @@ Module ClassLoader (module JAR)
 ./gradlew build
 ```
 
-Output: `build/libs/OrynPlugins-1.0.1.jar`
+Output: `build/libs/OrynPlugins-1.1.0.jar`
 
 ## Publishing
 
@@ -195,6 +195,20 @@ git push origin main
 ```
 
 ## Changelog
+
+### v1.1.0
+- Added `@ModuleInfo` annotation for metadata (alternative to getter methods)
+- Enhanced `ModuleContext` with scheduler helpers (runTask, runTaskAsync, etc.)
+- Enhanced `ModuleContext` with event helpers (registerEvents, unregisterEvents)
+- Enhanced `ModuleContext` with player utilities (getPlayer, getOnlinePlayers)
+- Added `onReload()` method to `OrynModule` interface
+- All `OrynModule` methods now have default implementations (except `onLoad`)
+- Command structure change: `/oryn modules <name> <args>` for module commands
+- Management commands remain: `/oryn module list|info|enable|disable|reload`
+
+### v1.0.2
+- Changed command structure: `/oryn modules <name>` for module commands
+- Management commands: `/oryn module list|info|enable|disable|reload`
 
 ### v1.0.1
 - Fixed `plugin.yml` description placeholder

@@ -197,8 +197,7 @@ public class OrynCommand implements CommandExecutor, TabCompleter {
         }
 
         try {
-            moduleLoader.disableModule(moduleName);
-            moduleLoader.enableModule(moduleName);
+            moduleLoader.reloadModule(moduleName);
             sender.sendMessage(PREFIX + SUCCESS + "Module " + moduleName + " reloaded");
         } catch (Exception e) {
             sender.sendMessage(PREFIX + ERROR + "Failed to reload module: " + e.getMessage());
