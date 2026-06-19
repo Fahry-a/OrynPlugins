@@ -374,10 +374,28 @@ public class OrynCommand implements CommandExecutor, TabCompleter {
         if (args.length >= 3 && args[0].equalsIgnoreCase("modules")) {
             String moduleName = args[1].toLowerCase();
             OrynModule module = moduleLoader.getModule(moduleName);
-            if (module != null) {
-                String[] moduleArgs = new String[args.length - 2];
-                System.arraycopy(args, 2, moduleArgs, 0, moduleArgs.length);
-                return module.onTabComplete(sender, moduleName, moduleArgs);
+            ModuleStatus status = moduleLoader.getModuleStatus(moduleName);
+            if (module != null && status == ModuleStatus.ENABLED) {
+                try {
+                    // Build module args: everything after "modules <name>"
+                    String[] moduleArgs = new String[args.length - 2];
+                    System.arraycopy(args, 2, moduleArgs, 0, moduleArgs.length);
+
+                    // Filter out trailing empty string so modules receive
+                    // args.length == 0 instead of args.length == 1 with ""
+                    String[] filteredArgs = moduleArgs;
+                    if (moduleArgs.length > 0 && moduleArgs[moduleArgs.length - 1].isEmpty()) {
+                        filteredArgs = new String[moduleArgs.length - 1];
+                        System.arraycopy(moduleArgs, 0, filteredArgs, 0, filteredArgs.length);
+                    }
+
+                    List<String> result = module.onTabComplete(sender, moduleName, filteredArgs);
+                    if (result != null) {
+                        return result;
+                    }
+                } catch (Exception e) {
+                    plugin.getLogger().warning("Tab completion error for module '" + moduleName + "': " + e.getMessage());
+                }
             }
         }
 
