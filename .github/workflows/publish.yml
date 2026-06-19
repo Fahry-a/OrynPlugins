@@ -26,7 +26,7 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
 
       - name: Build & Publish to Local Repo
-        run: ./gradlew clean build publish
+        run: ./gradlew clean build publish --no-daemon
 
       - name: Upload to B2
         env:
