@@ -10,11 +10,13 @@ public class ModuleContext {
     private final JavaPlugin hostPlugin;
     private final File moduleDataFolder;
     private final Logger logger;
+    private final ModuleConfigManager configManager;
 
     public ModuleContext(JavaPlugin hostPlugin, File moduleDataFolder, Logger logger) {
         this.hostPlugin = hostPlugin;
         this.moduleDataFolder = moduleDataFolder;
         this.logger = logger;
+        this.configManager = new ModuleConfigManager(moduleDataFolder, logger);
     }
 
     public JavaPlugin getHostPlugin() {
@@ -27,5 +29,9 @@ public class ModuleContext {
 
     public Logger getLogger() {
         return logger;
+    }
+
+    public ModuleConfigManager getConfigManager() {
+        return configManager;
     }
 }

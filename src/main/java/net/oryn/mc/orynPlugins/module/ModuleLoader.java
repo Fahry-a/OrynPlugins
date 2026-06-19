@@ -9,22 +9,26 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.jar.JarFile;
 import java.util.jar.Manifest;
 import java.util.logging.Level;
+import java.util.logging.Logger;
 
 public class ModuleLoader {
 
     private final OrynPlugins hostPlugin;
     private final File modulesFolder;
-    private final Map<String, OrynModule> modules = new LinkedHashMap<>();
-    private final Map<String, ModuleClassLoader> classLoaders = new LinkedHashMap<>();
+    private final Map<String, OrynModule> modules = new ConcurrentHashMap<>();
+    private final Map<String, ModuleClassLoader> classLoaders = new ConcurrentHashMap<>();
+    private final Map<String, ModuleStatus> moduleStatuses = new ConcurrentHashMap<>();
+    private final Map<String, Long> loadTimes = new ConcurrentHashMap<>();
 
     public ModuleLoader(OrynPlugins hostPlugin) {
         this.hostPlugin = hostPlugin;
         this.modulesFolder = new File(hostPlugin.getDataFolder(), "modules");
-        if (!modulesFolder.exists()) {
-            modulesFolder.mkdirs();
+        if (!modulesFolder.exists() && !modulesFolder.mkdirs()) {
+            hostPlugin.getLogger().warning("Failed to create modules directory");
         }
     }
 
@@ -48,52 +52,93 @@ public class ModuleLoader {
 
     @SuppressWarnings("unchecked")
     private void loadModule(File jarFile) throws Exception {
-        URL jarUrl = jarFile.toURI().toURL();
-        ModuleClassLoader classLoader = new ModuleClassLoader(
-                new URL[]{jarUrl},
-                hostPlugin.getClass().getClassLoader()
-        );
+        ModuleClassLoader classLoader = null;
+        try {
+            URL jarUrl = jarFile.toURI().toURL();
+            classLoader = new ModuleClassLoader(
+                    new URL[]{jarUrl},
+                    hostPlugin.getClass().getClassLoader()
+            );
 
-        String mainClassName;
-        try (JarFile jar = new JarFile(jarFile)) {
-            Manifest manifest = jar.getManifest();
-            if (manifest == null) {
-                throw new IllegalStateException("No MANIFEST.MF in: " + jarFile.getName());
+            String mainClassName;
+            try (JarFile jar = new JarFile(jarFile)) {
+                Manifest manifest = jar.getManifest();
+                if (manifest == null) {
+                    throw new IllegalStateException("No MANIFEST.MF in: " + jarFile.getName());
+                }
+                mainClassName = manifest.getMainAttributes().getValue("Main-Class");
+                if (mainClassName == null) {
+                    throw new IllegalStateException("No Main-Class in manifest: " + jarFile.getName());
+                }
             }
-            mainClassName = manifest.getMainAttributes().getValue("Main-Class");
-            if (mainClassName == null) {
-                throw new IllegalStateException("No Main-Class in manifest: " + jarFile.getName());
+
+            Class<?> mainClass = classLoader.loadClass(mainClassName);
+            Object instance = mainClass.getDeclaredConstructor().newInstance();
+
+            if (!(instance instanceof OrynModule module)) {
+                throw new IllegalStateException("Main class does not implement OrynModule: " + mainClassName);
             }
+
+            String moduleName = module.getName();
+            if (moduleName == null || moduleName.isBlank()) {
+                throw new IllegalStateException("Module name cannot be null or empty: " + mainClassName);
+            }
+
+            if (modules.containsKey(moduleName.toLowerCase())) {
+                hostPlugin.getLogger().warning("Module name collision: '" + moduleName + "' is already loaded. Skipping duplicate from: " + jarFile.getName());
+                closeClassLoader(classLoader);
+                return;
+            }
+
+            File moduleDataFolder = new File(modulesFolder, moduleName.toLowerCase());
+            if (!moduleDataFolder.exists() && !moduleDataFolder.mkdirs()) {
+                hostPlugin.getLogger().warning("Failed to create data folder for module: " + moduleName);
+            }
+
+            Logger moduleLogger = new ModuleLogger(hostPlugin.getLogger(), moduleName);
+
+            ModuleContext context = new ModuleContext(hostPlugin, moduleDataFolder, moduleLogger);
+
+            hostPlugin.getLogger().info("Loading module: " + moduleName + " v" + module.getVersion());
+            long startTime = System.currentTimeMillis();
+            boolean loadSuccess = module.onLoad(context);
+            long loadTime = System.currentTimeMillis() - startTime;
+
+            if (!loadSuccess) {
+                hostPlugin.getLogger().warning("Module " + moduleName + " returned false from onLoad(), skipping");
+                closeClassLoader(classLoader);
+                moduleStatuses.put(moduleName.toLowerCase(), ModuleStatus.ERRORED);
+                return;
+            }
+
+            modules.put(moduleName.toLowerCase(), module);
+            classLoaders.put(moduleName.toLowerCase(), classLoader);
+            moduleStatuses.put(moduleName.toLowerCase(), ModuleStatus.LOADED);
+            loadTimes.put(moduleName.toLowerCase(), loadTime);
+
+            hostPlugin.getLogger().info("Module " + moduleName + " loaded (" + loadTime + "ms)");
+
+        } catch (Exception e) {
+            if (classLoader != null) {
+                closeClassLoader(classLoader);
+            }
+            throw e;
         }
-
-        Class<?> mainClass = classLoader.loadClass(mainClassName);
-        Object instance = mainClass.getDeclaredConstructor().newInstance();
-
-        if (!(instance instanceof OrynModule module)) {
-            throw new IllegalStateException("Main class does not implement OrynModule: " + mainClassName);
-        }
-
-        File moduleDataFolder = new File(modulesFolder, module.getName());
-        if (!moduleDataFolder.exists()) {
-            moduleDataFolder.mkdirs();
-        }
-
-        ModuleContext context = new ModuleContext(hostPlugin, moduleDataFolder, hostPlugin.getLogger());
-
-        modules.put(module.getName().toLowerCase(), module);
-        classLoaders.put(module.getName().toLowerCase(), classLoader);
-
-        hostPlugin.getLogger().info("Loading module: " + module.getName() + " v" + module.getVersion());
-        module.onLoad(context);
     }
 
     public void enableAllModules() {
         for (Map.Entry<String, OrynModule> entry : modules.entrySet()) {
+            String name = entry.getKey();
+            if (moduleStatuses.get(name) != ModuleStatus.LOADED) {
+                continue;
+            }
             try {
-                hostPlugin.getLogger().info("Enabling module: " + entry.getKey());
+                hostPlugin.getLogger().info("Enabling module: " + name);
                 entry.getValue().onEnable();
+                moduleStatuses.put(name, ModuleStatus.ENABLED);
             } catch (Exception e) {
-                hostPlugin.getLogger().log(Level.SEVERE, "Failed to enable module: " + entry.getKey(), e);
+                hostPlugin.getLogger().log(Level.SEVERE, "Failed to enable module: " + name, e);
+                moduleStatuses.put(name, ModuleStatus.ERRORED);
             }
         }
     }
@@ -103,21 +148,65 @@ public class ModuleLoader {
             try {
                 hostPlugin.getLogger().info("Disabling module: " + entry.getKey());
                 entry.getValue().onDisable();
+                moduleStatuses.put(entry.getKey(), ModuleStatus.DISABLED);
             } catch (Exception e) {
                 hostPlugin.getLogger().log(Level.SEVERE, "Failed to disable module: " + entry.getKey(), e);
             }
         }
 
         for (Map.Entry<String, ModuleClassLoader> entry : classLoaders.entrySet()) {
-            try {
-                entry.getValue().close();
-            } catch (Exception e) {
-                hostPlugin.getLogger().log(Level.WARNING, "Failed to close classloader: " + entry.getKey(), e);
-            }
+            closeClassLoader(entry.getValue());
         }
 
         classLoaders.clear();
         modules.clear();
+        moduleStatuses.clear();
+        loadTimes.clear();
+    }
+
+    public boolean disableModule(String name) {
+        OrynModule module = modules.get(name.toLowerCase());
+        if (module == null) {
+            return false;
+        }
+
+        ModuleStatus status = moduleStatuses.get(name.toLowerCase());
+        if (status != ModuleStatus.ENABLED) {
+            return false;
+        }
+
+        try {
+            hostPlugin.getLogger().info("Disabling module: " + name);
+            module.onDisable();
+            moduleStatuses.put(name.toLowerCase(), ModuleStatus.DISABLED);
+            return true;
+        } catch (Exception e) {
+            hostPlugin.getLogger().log(Level.SEVERE, "Failed to disable module: " + name, e);
+            return false;
+        }
+    }
+
+    public boolean enableModule(String name) {
+        OrynModule module = modules.get(name.toLowerCase());
+        if (module == null) {
+            return false;
+        }
+
+        ModuleStatus status = moduleStatuses.get(name.toLowerCase());
+        if (status != ModuleStatus.LOADED && status != ModuleStatus.DISABLED) {
+            return false;
+        }
+
+        try {
+            hostPlugin.getLogger().info("Enabling module: " + name);
+            module.onEnable();
+            moduleStatuses.put(name.toLowerCase(), ModuleStatus.ENABLED);
+            return true;
+        } catch (Exception e) {
+            hostPlugin.getLogger().log(Level.SEVERE, "Failed to enable module: " + name, e);
+            moduleStatuses.put(name.toLowerCase(), ModuleStatus.ERRORED);
+            return false;
+        }
     }
 
     public OrynModule getModule(String name) {
@@ -132,19 +221,28 @@ public class ModuleLoader {
         return modules.containsKey(name.toLowerCase());
     }
 
+    public ModuleStatus getModuleStatus(String name) {
+        return moduleStatuses.getOrDefault(name.toLowerCase(), null);
+    }
+
+    public long getModuleLoadTime(String name) {
+        return loadTimes.getOrDefault(name.toLowerCase(), 0L);
+    }
+
+    private void closeClassLoader(ClassLoader cl) {
+        if (cl instanceof URLClassLoader urlCl) {
+            try {
+                urlCl.close();
+            } catch (Exception e) {
+                hostPlugin.getLogger().log(Level.WARNING, "Failed to close classloader", e);
+            }
+        }
+    }
+
     private static class ModuleClassLoader extends URLClassLoader {
 
         public ModuleClassLoader(URL[] urls, ClassLoader parent) {
             super(urls, parent);
-        }
-
-        @Override
-        protected void finalize() throws Throwable {
-            try {
-                close();
-            } finally {
-                super.finalize();
-            }
         }
     }
 }

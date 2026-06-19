@@ -1,6 +1,6 @@
 # Module Development Guide
 
-Guide untuk membuat module baru untuk OrynPlugins.
+Guide untuk membuat module baru untuk OrynPlugins v1.0.1.
 
 ## Apa itu Module?
 
@@ -38,7 +38,7 @@ repositories {
 
 dependencies {
     compileOnly("io.papermc.paper:paper-api:1.21.1-R0.1-SNAPSHOT")
-    compileOnly("net.oryn.mc:orynplugins:1.0.0")
+    compileOnly("net.oryn.mc:orynplugins:1.0.1")
 }
 
 java {
@@ -96,9 +96,15 @@ public class MyModule implements OrynModule {
     }
 
     @Override
-    public void onLoad(ModuleContext context) {
+    public String getAuthor() {
+        return "YourName";
+    }
+
+    @Override
+    public boolean onLoad(ModuleContext context) {
         this.context = context;
         context.getLogger().info("MyModule loaded!");
+        return true; // Return false to abort loading
     }
 
     @Override
@@ -139,22 +145,23 @@ Jika ingin publish module untuk akses dari project lain:
 ./gradlew publish
 ```
 
-Artifacts akan di-publish ke `https://maven.oryn.my.id`. Lihat [MODULE-DEVELOPMENT.md](../MODULE-DEVELOPMENT.md) untuk detail publish workflow.
-
 ## Module API Reference
 
 ### `OrynModule` Interface
 
-| Method | Description |
-|--------|-------------|
-| `getName()` | Nama module (unique, lowercase) |
-| `getVersion()` | Version string |
-| `getDescription()` | Deskripsi singkat |
-| `onLoad(ModuleContext)` | Dipanggil saat module di-load |
-| `onEnable()` | Dipanggil saat module di-enable |
-| `onDisable()` | Dipanggil saat module di-disable |
-| `onCommand(sender, label, args)` | Handle command dari `/oryn module <name>` |
-| `onTabComplete(sender, label, args)` | Tab completion untuk command |
+| Method | Return | Description |
+|--------|--------|-------------|
+| `getName()` | `String` | Nama module (unique, lowercase) |
+| `getVersion()` | `String` | Version string |
+| `getDescription()` | `String` | Deskripsi singkat |
+| `getAuthor()` | `String` | Author name (default: "Unknown") |
+| `getDependencies()` | `List<String>` | Hard dependencies (default: empty) |
+| `getSoftDependencies()` | `List<String>` | Soft dependencies (default: empty) |
+| `onLoad(ModuleContext)` | `boolean` | Called when module is loaded. Return `false` to abort |
+| `onEnable()` | `void` | Called when module is enabled |
+| `onDisable()` | `void` | Called when module is disabled |
+| `onCommand(sender, label, args)` | `boolean` | Handle command dari `/oryn module <name>` |
+| `onTabComplete(sender, label, args)` | `List<String>` | Tab completion untuk command |
 
 ### `ModuleContext` Class
 
@@ -162,7 +169,32 @@ Artifacts akan di-publish ke `https://maven.oryn.my.id`. Lihat [MODULE-DEVELOPME
 |--------|-------------|
 | `getHostPlugin()` | Instance OrynPlugins (`JavaPlugin`) |
 | `getModuleDataFolder()` | Folder data module (`plugins/OrynPlugins/modules/<name>/`) |
-| `getLogger()` | Logger untuk module |
+| `getLogger()` | Per-module logger dengan prefix `[<name>]` |
+| `getConfigManager()` | `ModuleConfigManager` instance |
+
+### `ModuleStatus` Enum
+
+| Status | Description |
+|--------|-------------|
+| `LOADED` | Module loaded but not yet enabled |
+| `ENABLED` | Module is running |
+| `DISABLED` | Module was disabled |
+| `ERRORED` | Module failed to load or enable |
+
+### `ModuleConfigManager` Class
+
+Standardized config management untuk modules:
+
+```java
+public class ModuleConfigManager {
+    void loadDefaultConfig(Class<?> resourceSource, String resourceName);
+    void reload();
+    FileConfiguration getConfig();
+    File getDataFolder();
+    void saveConfig();
+    void saveDefaultConfig(Class<?> resourceSource, String resourceName);
+}
+```
 
 ## ClassLoader Hierarchy
 
@@ -198,136 +230,46 @@ Module ClassLoader (module JAR)
    ├── Read Main-Class from MANIFEST.MF
    ├── Instantiate class
    ├── Cast to OrynModule
-   └── Call onLoad(context)
+   ├── Check name collision
+   └── Call onLoad(context) → boolean
 
 3. ModuleLoader.enableAllModules()
-   └── Call onEnable() for each module
+   └── Call onEnable() for each LOADED module
 
 4. [Server Shutdown]
 
 5. ModuleLoader.disableAllModules()
-   ├── Call onDisable() for each module
+   ├── Call onDisable() for each ENABLED module
    └── Close classloaders
+```
+
+## Per-Module Logger
+
+Setiap module mendapat logger dengan prefix `[<moduleName>]`:
+
+```java
+@Override
+public boolean onLoad(ModuleContext context) {
+    // Output: [MyModule] Hello world!
+    context.getLogger().info("Hello world!");
+    return true;
+}
 ```
 
 ## Config Pattern
 
-Module menggunakan `ConfigManager` pattern untuk config:
+Module menggunakan `ModuleConfigManager` dari host:
 
 ```java
 public class MyModule implements OrynModule {
 
-    private ConfigManager configManager;
+    private ModuleConfigManager configManager;
 
     @Override
-    public void onLoad(ModuleContext context) {
-        // ConfigManager(dataFolder, resourceSource, logger)
-        // - dataFolder: module data folder
-        // - resourceSource: class for resource loading (use MyModule.class)
-        // - logger: module logger
-        configManager = new ConfigManager(
-            context.getModuleDataFolder(),
-            MyModule.class,
-            context.getLogger()
-        );
-    }
-}
-```
-
-**ConfigManager constructor:**
-
-```java
-public ConfigManager(File dataFolder, Class<?> resourceSource, Logger logger)
-```
-
-- `dataFolder` — `context.getModuleDataFolder()` (folder data module)
-- `resourceSource` — `MyModule.class` (class untuk load resource dari JAR)
-- `logger` — `context.getLogger()`
-
-**Metode utama:**
-
-| Method | Description |
-|--------|-------------|
-| `load()` | Load/reload config dari file |
-| `reload()` | Reload config |
-| `getConfig()` | Get `FileConfiguration` instance |
-| `isValid()` | Cek apakah config valid |
-| `getValidationErrors()` | List error validasi |
-
-## Log Pattern
-
-Module menggunakan `LogManager` untuk log archiving:
-
-```java
-LogManager logManager = new LogManager(
-    context.getModuleDataFolder(),
-    context.getLogger()
-);
-```
-
-**LogManager constructor:**
-
-```java
-public LogManager(File dataFolder, Logger logger)
-```
-
-**Metode utama:**
-
-| Method | Description |
-|--------|-------------|
-| `log(message)` | Tulis log ke file |
-| `archive()` | Kompres log ke .zst format |
-| `close()` | Tutup log writer |
-
-## Command Pattern
-
-Module menggunakan `TunnelCommand` pattern untuk command handling:
-
-```java
-public class MyModule implements OrynModule {
-
-    private MyCommand myCommand;
-
-    @Override
-    public void onLoad(ModuleContext context) {
-        myCommand = new MyCommand(context.getHostPlugin(), ...);
-    }
-
-    @Override
-    public boolean onCommand(CommandSender sender, String label, String[] args) {
-        return myCommand.onModuleCommand(sender, label, args);
-    }
-
-    @Override
-    public List<String> onTabComplete(CommandSender sender, String label, String[] args) {
-        return myCommand.onModuleTabComplete(sender, label, args);
-    }
-}
-```
-
-**Module command methods:**
-
-| Method | Description |
-|--------|-------------|
-| `onModuleCommand(sender, label, args)` | Handle command dari module mode |
-| `onModuleTabComplete(sender, label, args)` | Tab completion untuk module mode |
-
-## Contoh: Module dengan Config
-
-```java
-public class MyModule implements OrynModule {
-
-    private ModuleContext context;
-    private ConfigManager configManager;
-
-    @Override
-    public void onLoad(ModuleContext context) {
-        this.context = context;
-        configManager = new ConfigManager(
-            context.getModuleDataFolder(),
-            MyModule.class,
-            context.getLogger()
-        );
+    public boolean onLoad(ModuleContext context) {
+        configManager = context.getConfigManager();
+        configManager.loadDefaultConfig(MyModule.class, "config.yml");
+        return true;
     }
 
     @Override
@@ -338,7 +280,17 @@ public class MyModule implements OrynModule {
 }
 ```
 
-## Contoh: Module dengan Command
+Atau gunakan `ConfigManager` custom seperti di Oryn-Tunnelv2:
+
+```java
+configManager = new ConfigManager(
+    context.getModuleDataFolder(),
+    MyModule.class,
+    context.getLogger()
+);
+```
+
+## Command Pattern
 
 ```java
 public class MyModule implements OrynModule {
@@ -346,8 +298,9 @@ public class MyModule implements OrynModule {
     private MyCommand myCommand;
 
     @Override
-    public void onLoad(ModuleContext context) {
+    public boolean onLoad(ModuleContext context) {
         myCommand = new MyCommand();
+        return true;
     }
 
     @Override
@@ -360,45 +313,56 @@ public class MyModule implements OrynModule {
         return myCommand.onModuleTabComplete(sender, label, args);
     }
 }
-
-public class MyCommand {
-
-    public boolean onModuleCommand(CommandSender sender, String label, String[] args) {
-        if (args.length == 0) {
-            showHelp(sender);
-            return true;
-        }
-
-        switch (args[0].toLowerCase()) {
-            case "info" -> sender.sendMessage("Module info!");
-            case "reload" -> sender.sendMessage("Config reloaded!");
-            default -> sender.sendMessage("Unknown subcommand. Use /oryn module <name> help");
-        }
-
-        return true;
-    }
-
-    public List<String> onModuleTabComplete(CommandSender sender, String label, String[] args) {
-        if (args.length == 1) {
-            return List.of("info", "reload", "help");
-        }
-        return List.of();
-    }
-}
 ```
 
-## Contoh: Module dengan Auto-Update
+## Module Management Commands
+
+Users dapat manage modules dari in-game:
+
+| Command | Description |
+|---------|-------------|
+| `/oryn module list` | List semua loaded modules dengan status |
+| `/oryn module info <name>` | Detail info module (author, deps, status, load time) |
+| `/oryn module enable <name>` | Enable module |
+| `/oryn module disable <name>` | Disable module |
+| `/oryn module reload <name>` | Reload module (disable + enable) |
+
+## Contoh: Module dengan Dependencies
 
 ```java
 public class MyModule implements OrynModule {
 
-    private CloudflaredManager cloudflaredManager;
-    private ConfigManager configManager;
-    private JavaPlugin hostPlugin;
+    @Override
+    public List<String> getDependencies() {
+        return List.of("tunnel"); // Requires tunnel module
+    }
 
     @Override
-    public void onLoad(ModuleContext context) {
-        hostPlugin = context.getHostPlugin();
+    public List<String> getSoftDependencies() {
+        return List.of("vault"); // Optional dependency
+    }
+
+    @Override
+    public boolean onLoad(ModuleContext context) {
+        // ModuleLoader will check dependencies before enabling
+        return true;
+    }
+}
+```
+
+## Contoh: Module dengan Config + Auto-Update
+
+```java
+public class MyModule implements OrynModule {
+
+    private ModuleContext context;
+    private ConfigManager configManager;
+    private CloudflaredManager cloudflaredManager;
+
+    @Override
+    public boolean onLoad(ModuleContext context) {
+        this.context = context;
+
         configManager = new ConfigManager(
             context.getModuleDataFolder(),
             MyModule.class,
@@ -406,32 +370,25 @@ public class MyModule implements OrynModule {
         );
 
         cloudflaredManager = new CloudflaredManager(
-            hostPlugin,
+            context.getHostPlugin(),
             context.getModuleDataFolder(),
             new LogManager(context.getModuleDataFolder(), context.getLogger())
         );
+
+        return configManager.isValid();
     }
 
     @Override
     public void onEnable() {
         if (configManager.getConfig().getBoolean("auto-update", true)) {
-            hostPlugin.getServer().getScheduler().runTaskAsynchronously(hostPlugin, () -> {
-                cloudflaredManager.checkAndUpdate();
-            });
+            context.getHostPlugin().getServer().getScheduler().runTaskAsynchronously(
+                context.getHostPlugin(),
+                () -> cloudflaredManager.checkAndUpdate()
+            );
         }
     }
 }
 ```
-
-**CloudflaredManager constructor:**
-
-```java
-public CloudflaredManager(JavaPlugin plugin, File dataFolder, LogManager logManager)
-```
-
-- `plugin` — `context.getHostPlugin()` (untuk scheduler)
-- `dataFolder` — `context.getModuleDataFolder()` (bin folder di dalamnya)
-- `logManager` — `LogManager` instance
 
 ## Troubleshooting
 
@@ -440,7 +397,8 @@ public CloudflaredManager(JavaPlugin plugin, File dataFolder, LogManager logMana
 1. Pastikan JAR ada di `plugins/OrynPlugins/modules/`
 2. Pastikan JAR memiliki `Main-Class` di `MANIFEST.MF`
 3. Pastikan class yang di-define implements `OrynModule`
-4. Cek log server untuk error messages
+4. Pastikan `onLoad()` return `true`
+5. Cek log server untuk error messages
 
 ### ClassNotFoundException
 
@@ -450,7 +408,7 @@ public CloudflaredManager(JavaPlugin plugin, File dataFolder, LogManager logMana
 ### NoClassDefFoundError
 
 - Pastikan OrynPlugins sudah di-build terlebih dahulu
-- Module JAR harus compile against OrynPlugins JAR
+- Module JAR harus compile against OrynPlugins JAR v1.0.1
 
 ### Module tidak bisa akses class lain
 
@@ -458,13 +416,20 @@ public CloudflaredManager(JavaPlugin plugin, File dataFolder, LogManager logMana
 - Class dari module lain tidak bisa diakses (isolated)
 - Gunakan event/buka API untuk inter-module communication
 
+### Name Collision
+
+- Module dengan nama yang sama akan di-skip (warning di log)
+- Gunakan nama yang unik untuk setiap module
+
 ## Best Practices
 
 1. **Gunakan `compileOnly` untuk OrynPlugins dependency** — Jangan bundle OrynPlugins ke dalam module JAR
 2. **Config self-contained** — Module baca config dari folder data sendiri
 3. **Graceful shutdown** — Handle `onDisable()` dengan benar (stop tasks, close resources)
-4. **Logging** — Gunakan `context.getLogger()` bukan `System.out`
-5. **Error handling** — Jangan biarkan exception crash server
+4. **Logging** — Gunakan `context.getLogger()` (sudah ada prefix)
+5. **Error handling** — Return `false` dari `onLoad()` jika config invalid
 6. **Permission** — Cek permission sebelum eksekusi command
-7. **Resource source** — Pass `MyModule.class` ke ConfigManager untuk load default config dari JAR
+7. **Resource source** — Pass `MyModule.class` ke ConfigManager untuk load default config
 8. **Thread safety** — Gunakan scheduler untuk async tasks, jangan block main thread
+9. **Unique names** — Gunakan nama module yang unik untuk menghindari collision
+10. **Metadata** — Sediakan `getAuthor()` dan `getDependencies()` untuk info

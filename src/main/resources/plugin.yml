@@ -1,5 +1,5 @@
 name: OrynPlugins
-description: $description
+description: '${description}'
 version: '${version}'
 
 main: net.oryn.mc.orynPlugins.OrynPlugins
