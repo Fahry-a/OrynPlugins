@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "net.oryn.mc"
-version = "1.0.1"
+version = "1.0.2"
 description = "A Main Plugin For Oryn Server"
 
 repositories {

@@ -12,10 +12,8 @@ import org.bukkit.command.CommandSender;
 import org.bukkit.command.TabCompleter;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
-import java.util.Map;
 import java.util.stream.Collectors;
 
 public class OrynCommand implements CommandExecutor, TabCompleter {
@@ -44,6 +42,7 @@ public class OrynCommand implements CommandExecutor, TabCompleter {
 
         String subCommand = args[0].toLowerCase();
 
+        // /oryn module <action> - Management commands
         if (subCommand.equals("module")) {
             if (args.length < 2) {
                 showModuleHelp(sender);
@@ -90,13 +89,24 @@ public class OrynCommand implements CommandExecutor, TabCompleter {
                     return true;
                 }
                 default -> {
-                    // Delegate to module
-                    String[] moduleArgs = new String[args.length - 2];
-                    System.arraycopy(args, 2, moduleArgs, 0, moduleArgs.length);
-                    delegateToModule(sender, action, moduleArgs);
+                    sender.sendMessage(PREFIX + ERROR + "Unknown action: " + action + ". Use /oryn module list");
                     return true;
                 }
             }
+        }
+
+        // /oryn modules <name> <args> - Delegate to module
+        if (subCommand.equals("modules")) {
+            if (args.length < 2) {
+                showModulesHelp(sender);
+                return true;
+            }
+
+            String moduleName = args[1].toLowerCase();
+            String[] moduleArgs = new String[args.length - 2];
+            System.arraycopy(args, 2, moduleArgs, 0, moduleArgs.length);
+            delegateToModule(sender, moduleName, moduleArgs);
+            return true;
         }
 
         sender.sendMessage(PREFIX + ERROR + "Unknown subcommand. Use /oryn help");
@@ -256,23 +266,29 @@ public class OrynCommand implements CommandExecutor, TabCompleter {
 
     private void showHelp(CommandSender sender) {
         sender.sendMessage(HEADER + "========== Oryn Commands ==========");
+        sender.sendMessage(INFO + "/oryn help " + DIM + "- Show this help");
         sender.sendMessage(INFO + "/oryn module list " + DIM + "- List all loaded modules");
         sender.sendMessage(INFO + "/oryn module info <name> " + DIM + "- Show module info");
         sender.sendMessage(INFO + "/oryn module enable <name> " + DIM + "- Enable a module");
         sender.sendMessage(INFO + "/oryn module disable <name> " + DIM + "- Disable a module");
         sender.sendMessage(INFO + "/oryn module reload <name> " + DIM + "- Reload a module");
-        sender.sendMessage(INFO + "/oryn module <name> <args> " + DIM + "- Execute module command");
+        sender.sendMessage(INFO + "/oryn modules <name> <args> " + DIM + "- Execute module command");
         sender.sendMessage(HEADER + "====================================");
     }
 
     private void showModuleHelp(CommandSender sender) {
-        sender.sendMessage(HEADER + "========== Module Commands ==========");
+        sender.sendMessage(HEADER + "========== Module Management ==========");
         sender.sendMessage(INFO + "/oryn module list " + DIM + "- List all loaded modules");
         sender.sendMessage(INFO + "/oryn module info <name> " + DIM + "- Show module info");
         sender.sendMessage(INFO + "/oryn module enable <name> " + DIM + "- Enable a module");
         sender.sendMessage(INFO + "/oryn module disable <name> " + DIM + "- Disable a module");
         sender.sendMessage(INFO + "/oryn module reload <name> " + DIM + "- Reload a module");
-        sender.sendMessage(INFO + "/oryn module <name> " + DIM + "- Module help/commands");
+        sender.sendMessage(HEADER + "========================================");
+    }
+
+    private void showModulesHelp(CommandSender sender) {
+        sender.sendMessage(HEADER + "========== Module Commands ==========");
+        sender.sendMessage(INFO + "/oryn modules <name> <args> " + DIM + "- Execute module command");
 
         var modules = moduleLoader.getModules();
         if (!modules.isEmpty()) {
@@ -295,11 +311,12 @@ public class OrynCommand implements CommandExecutor, TabCompleter {
         }
 
         if (args.length == 1) {
-            return List.of("module").stream()
+            return List.of("module", "modules").stream()
                     .filter(s -> s.startsWith(args[0].toLowerCase()))
                     .collect(Collectors.toList());
         }
 
+        // /oryn module <action> - Management commands
         if (args.length == 2 && args[0].equalsIgnoreCase("module")) {
             List<String> completions = new ArrayList<>();
             completions.add("list");
@@ -307,14 +324,12 @@ public class OrynCommand implements CommandExecutor, TabCompleter {
             completions.add("enable");
             completions.add("disable");
             completions.add("reload");
-            completions.addAll(moduleLoader.getModules().stream()
-                    .map(OrynModule::getName)
-                    .collect(Collectors.toList()));
             return completions.stream()
                     .filter(s -> s.startsWith(args[1].toLowerCase()))
                     .collect(Collectors.toList());
         }
 
+        // /oryn module info|enable|disable|reload <name>
         if (args.length == 3 && args[0].equalsIgnoreCase("module")) {
             String action = args[1].toLowerCase();
             if (List.of("info", "enable", "disable", "reload").contains(action)) {
@@ -325,7 +340,16 @@ public class OrynCommand implements CommandExecutor, TabCompleter {
             }
         }
 
-        if (args.length >= 3 && args[0].equalsIgnoreCase("module")) {
+        // /oryn modules <name> - Module names
+        if (args.length == 2 && args[0].equalsIgnoreCase("modules")) {
+            return moduleLoader.getModules().stream()
+                    .map(OrynModule::getName)
+                    .filter(s -> s.startsWith(args[1].toLowerCase()))
+                    .collect(Collectors.toList());
+        }
+
+        // /oryn modules <name> <args...> - Delegate tab complete to module
+        if (args.length >= 3 && args[0].equalsIgnoreCase("modules")) {
             String moduleName = args[1].toLowerCase();
             OrynModule module = moduleLoader.getModule(moduleName);
             if (module != null) {
