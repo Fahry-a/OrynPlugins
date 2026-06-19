@@ -34,6 +34,7 @@ Module host plugin for Oryn server. Loads and manages modules from `plugins/Oryn
 | `/oryn module enable <name>` | Enable a module |
 | `/oryn module disable <name>` | Disable a module |
 | `/oryn module reload <name>` | Reload a module (calls onReload) |
+| `/oryn module detect` | Detect and load new modules from folder |
 | `/oryn modules <name> <args>` | Execute module command |
 | `/oryn help` | Show help |
 

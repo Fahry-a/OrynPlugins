@@ -88,6 +88,10 @@ public class OrynCommand implements CommandExecutor, TabCompleter {
                     disableModule(sender, args[2]);
                     return true;
                 }
+                case "detect" -> {
+                    detectNewModules(sender);
+                    return true;
+                }
                 default -> {
                     sender.sendMessage(PREFIX + ERROR + "Unknown action: " + action + ". Use /oryn module list");
                     return true;
@@ -242,6 +246,22 @@ public class OrynCommand implements CommandExecutor, TabCompleter {
         }
     }
 
+    private void detectNewModules(CommandSender sender) {
+        sender.sendMessage(PREFIX + INFO + "Scanning for new modules...");
+
+        List<String> newModules = moduleLoader.detectNewModules();
+
+        if (newModules.isEmpty()) {
+            sender.sendMessage(PREFIX + DIM + "No new modules found");
+            return;
+        }
+
+        sender.sendMessage(PREFIX + SUCCESS + "Found " + newModules.size() + " new module(s):");
+        for (String moduleName : newModules) {
+            sender.sendMessage(INFO + "  + " + moduleName + DIM + " (loaded, use /oryn module enable " + moduleName + " to enable)");
+        }
+    }
+
     private void delegateToModule(CommandSender sender, String moduleName, String[] args) {
         OrynModule module = moduleLoader.getModule(moduleName);
         if (module == null) {
@@ -271,6 +291,7 @@ public class OrynCommand implements CommandExecutor, TabCompleter {
         sender.sendMessage(INFO + "/oryn module enable <name> " + DIM + "- Enable a module");
         sender.sendMessage(INFO + "/oryn module disable <name> " + DIM + "- Disable a module");
         sender.sendMessage(INFO + "/oryn module reload <name> " + DIM + "- Reload a module");
+        sender.sendMessage(INFO + "/oryn module detect " + DIM + "- Detect new modules in folder");
         sender.sendMessage(INFO + "/oryn modules <name> <args> " + DIM + "- Execute module command");
         sender.sendMessage(HEADER + "====================================");
     }
@@ -282,6 +303,7 @@ public class OrynCommand implements CommandExecutor, TabCompleter {
         sender.sendMessage(INFO + "/oryn module enable <name> " + DIM + "- Enable a module");
         sender.sendMessage(INFO + "/oryn module disable <name> " + DIM + "- Disable a module");
         sender.sendMessage(INFO + "/oryn module reload <name> " + DIM + "- Reload a module");
+        sender.sendMessage(INFO + "/oryn module detect " + DIM + "- Detect new modules in folder");
         sender.sendMessage(HEADER + "========================================");
     }
 
@@ -323,6 +345,7 @@ public class OrynCommand implements CommandExecutor, TabCompleter {
             completions.add("enable");
             completions.add("disable");
             completions.add("reload");
+            completions.add("detect");
             return completions.stream()
                     .filter(s -> s.startsWith(args[1].toLowerCase()))
                     .collect(Collectors.toList());

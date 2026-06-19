@@ -334,6 +334,83 @@ public class ModuleLoader {
         return loadTimes.getOrDefault(name.toLowerCase(), 0L);
     }
 
+    /**
+     * Detect and load new modules from the modules folder.
+     * Scans for JAR files that haven't been loaded yet.
+     * 
+     * @return List of newly loaded module names
+     */
+    public java.util.List<String> detectNewModules() {
+        java.util.List<String> newModules = new java.util.ArrayList<>();
+
+        File[] jarFiles = modulesFolder.listFiles((dir, name) -> name.endsWith(".jar"));
+        if (jarFiles == null || jarFiles.length == 0) {
+            return newModules;
+        }
+
+        for (File jarFile : jarFiles) {
+            try {
+                // Get module name from JAR without loading it
+                String moduleName = getModuleNameFromJar(jarFile);
+                if (moduleName == null) {
+                    continue;
+                }
+
+                // Skip if already loaded
+                if (modules.containsKey(moduleName.toLowerCase())) {
+                    continue;
+                }
+
+                // Load the new module
+                loadModule(jarFile);
+                newModules.add(moduleName);
+                hostPlugin.getLogger().info("Detected and loaded new module: " + moduleName);
+
+            } catch (Exception e) {
+                hostPlugin.getLogger().log(Level.WARNING, "Failed to detect module: " + jarFile.getName(), e);
+            }
+        }
+
+        return newModules;
+    }
+
+    /**
+     * Get module name from JAR file without fully loading it.
+     * Used for detecting new modules.
+     */
+    private String getModuleNameFromJar(File jarFile) {
+        try (JarFile jar = new JarFile(jarFile)) {
+            Manifest manifest = jar.getManifest();
+            if (manifest == null) {
+                return null;
+            }
+
+            String mainClassName = manifest.getMainAttributes().getValue("Main-Class");
+            if (mainClassName == null) {
+                return null;
+            }
+
+            // Create a temporary classloader to read the annotation
+            URL jarUrl = jarFile.toURI().toURL();
+            try (ModuleClassLoader tempClassLoader = new ModuleClassLoader(
+                    new URL[]{jarUrl},
+                    hostPlugin.getClass().getClassLoader()
+            )) {
+                Class<?> mainClass = tempClassLoader.loadClass(mainClassName);
+                if (!OrynModule.class.isAssignableFrom(mainClass)) {
+                    return null;
+                }
+
+                // Create temporary instance to get name
+                OrynModule tempModule = (OrynModule) mainClass.getDeclaredConstructor().newInstance();
+                return getModuleName(tempModule, mainClass);
+            }
+
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     private void closeClassLoader(ClassLoader cl) {
         if (cl instanceof URLClassLoader urlCl) {
             try {
