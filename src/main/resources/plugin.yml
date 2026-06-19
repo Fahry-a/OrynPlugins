@@ -8,3 +8,14 @@ api-version: '1.21.1'
 load: STARTUP
 
 authors: [ Fahry-a ]
+
+commands:
+  oryn:
+    description: OrynPlugins main command
+    usage: /oryn <module|help>
+    permission: oryn.admin
+
+permissions:
+  oryn.admin:
+    description: Allows use of OrynPlugins commands
+    default: op
