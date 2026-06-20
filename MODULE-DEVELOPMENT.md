@@ -1,6 +1,6 @@
 # Module Development Guide
 
-Guide untuk membuat module baru untuk OrynPlugins v1.1.0.
+Guide untuk membuat module baru untuk OrynPlugins v1.2.0.
 
 ## Apa itu Module?
 
@@ -49,7 +49,8 @@ tasks {
     jar {
         manifest {
             attributes(
-                "Main-Class" to "com.example.mymodule.MyModule"
+                "Main-Class" to "com.example.mymodule.MyModule",
+                "Module-Name" to "mymodule"
             )
         }
     }
@@ -65,6 +66,19 @@ tasks {
 ```
 
 ### 2. Implement `OrynModule` Interface
+
+> **Tip:** Add `Module-Name` attribute ke `MANIFEST.MF` agar module bisa dideteksi tanpa load class (lebih cepat untuk hot-detect). Jika tidak ada, fallback ke `Main-Class` name.
+
+```kotlin
+jar {
+    manifest {
+        attributes(
+            "Main-Class" to "com.example.mymodule.MyModule",
+            "Module-Name" to "mymodule"
+        )
+    }
+}
+```
 
 #### Option A: Using @ModuleInfo Annotation (Recommended)
 
@@ -423,7 +437,194 @@ public class MyModule implements OrynModule {
 }
 ```
 
+## Config Validation Pattern
+
+Validasi config setelah load/reload:
+
+```java
+public class MyModule implements OrynModule {
+
+    private ModuleConfigManager configManager;
+
+    @Override
+    public boolean onLoad(ModuleContext context) {
+        configManager = context.getConfigManager();
+        configManager.loadDefaultConfig(MyModule.class, "config.yml");
+
+        // Set validator - dipanggil setelah load dan reload
+        configManager.setValidator(config -> {
+            String host = config.getString("host");
+            int port = config.getInt("port", -1);
+            if (host == null || host.isBlank()) {
+                context.getLogger().warning("'host' tidak boleh kosong!");
+                return false;
+            }
+            if (port < 1 || port > 65535) {
+                context.getLogger().warning("'port' harus antara 1-65535!");
+                return false;
+            }
+            return true;
+        });
+
+        // Register callback saat config di-reload
+        configManager.onReload(() -> {
+            context.getLogger().info("Config reloaded, reconnecting...");
+            // Reconnect logic...
+        });
+
+        return configManager.validate();
+    }
+}
+```
+
+## Service Registry Pattern
+
+Module bisa expose services ke module lain:
+
+```java
+// Module A: Provider
+@ModuleInfo(name = "database", version = "1.0.0")
+public class DatabaseModule implements OrynModule {
+
+    private DatabaseConnection connection;
+
+    @Override
+    public boolean onLoad(ModuleContext context) {
+        connection = new DatabaseConnection(context.getConfigManager().getConfig());
+        context.getServiceRegistry().register("database", connection);
+        return true;
+    }
+
+    @Override
+    public void onDisable() {
+        context.getServiceRegistry().unregister("database");
+        if (connection != null) connection.close();
+    }
+}
+
+// Module B: Consumer
+@ModuleInfo(name = "player-stats", version = "1.0.0", dependencies = {"database"})
+public class PlayerStatsModule implements OrynModule {
+
+    @Override
+    public boolean onLoad(ModuleContext context) {
+        Optional<DatabaseConnection> db = context.getServiceRegistry()
+            .get("database", DatabaseConnection.class);
+
+        if (db.isEmpty()) {
+            context.getLogger().severe("Database module not available!");
+            return false;
+        }
+
+        // Use db.get() for database operations
+        return true;
+    }
+}
+```
+
+## Lifecycle Event Pattern
+
+Dengarkan lifecycle module lain:
+
+```java
+public class MyModule implements OrynModule {
+
+    @Override
+    public boolean onLoad(ModuleContext context) {
+        context.getModuleLoader().addLifecycleListener(event -> {
+            switch (event.type()) {
+                case ENABLED -> {
+                    if (event.moduleName().equals("database")) {
+                        context.getLogger().info("Database module enabled, initializing...");
+                    }
+                }
+                case DISABLED -> {
+                    if (event.moduleName().equals("database")) {
+                        context.getLogger().warning("Database module disabled!");
+                    }
+                }
+                default -> {}
+            }
+        });
+        return true;
+    }
+}
+```
+
+## Subcommand Pattern (Recommended)
+
+Gunakan `SubcommandHandler` untuk command routing yang clean:
+
+```java
+public class MyModule implements OrynModule {
+
+    private SubcommandHandler handler;
+    private ModuleContext context;
+
+    @Override
+    public boolean onLoad(ModuleContext context) {
+        this.context = context;
+        handler = new SubcommandHandler("myplugin", "My plugin commands");
+
+        handler.register("reload", "Reload configuration", (sender, args) -> {
+            context.getConfigManager().reload();
+            sender.sendMessage("§aConfig reloaded!");
+        });
+
+        handler.register("status", "Show plugin status", (sender, args) -> {
+            sender.sendMessage("§7Modules loaded: §f" + context.getModuleLoader().getModules().size());
+        });
+
+        handler.register("give", "Give item to player", this::handleGive, this::tabGive);
+
+        return true;
+    }
+
+    @Override
+    public boolean onCommand(CommandSender sender, String label, String[] args) {
+        return handler.execute(sender, args);
+    }
+
+    @Override
+    public List<String> onTabComplete(CommandSender sender, String label, String[] args) {
+        return handler.tabComplete(sender, args);
+    }
+
+    private void handleGive(CommandSender sender, String[] args) {
+        if (args.length < 2) {
+            handler.showHelp(sender);
+            return;
+        }
+        Player target = Bukkit.getPlayer(args[0]);
+        if (target == null) {
+            sender.sendMessage("§cPlayer not found!");
+            return;
+        }
+        ItemStack item = new ItemStack(Material.matchMaterial(args[1].toUpperCase()));
+        target.getInventory().addItem(item);
+        sender.sendMessage("§aGave " + args[1] + " to " + target.getName());
+    }
+
+    private List<String> tabGive(CommandSender sender, String[] args) {
+        if (args.length == 1) {
+            return Bukkit.getOnlinePlayers().stream()
+                .map(Player::getName)
+                .filter(n -> n.startsWith(args[0]))
+                .collect(Collectors.toList());
+        }
+        if (args.length == 2) {
+            return Arrays.stream(Material.values())
+                .map(Material::name)
+                .filter(n -> n.toLowerCase().startsWith(args[1].toLowerCase()))
+                .collect(Collectors.toList());
+        }
+        return List.of();
+    }
+}
+```
+
 ## Module Management Commands
+
 
 Users dapat manage modules dari in-game:
 
@@ -498,6 +699,207 @@ public class MyModule implements OrynModule {
 }
 ```
 
+## API Baru: Module Context Enhancements
+
+### Service Registry
+
+Module bisa register dan consume services dari module lain. Ini memungkinkan inter-module communication tanpa coupling langsung.
+
+```java
+@ModuleInfo(name = "vault-bridge", version = "1.0.0", description = "Vault integration")
+public class VaultBridgeModule implements OrynModule {
+
+    @Override
+    public boolean onLoad(ModuleContext context) {
+        // Register service ini agar module lain bisa pakai
+        context.getServiceRegistry().register("vault-bridge", new VaultBridgeImpl());
+        return true;
+    }
+}
+
+@ModuleInfo(name = "economy", version = "1.0.0", description = "Economy system", dependencies = {"vault-bridge"})
+public class EconomyModule implements OrynModule {
+
+    @Override
+    public boolean onLoad(ModuleContext context) {
+        // Ambil service dari module vault-bridge
+        Optional<VaultBridge> bridge = context.getServiceRegistry()
+            .get("vault-bridge", VaultBridge.class);
+
+        bridge.ifPresent(b -> {
+            b.setup();
+            context.getLogger().info("Connected to Vault!");
+        });
+
+        return bridge.isPresent();
+    }
+}
+```
+
+**Service Registry Methods:**
+- `register(String name, Object service)` — Register service
+- `get(String name, Class<T> type)` — Get service dengan type check
+- `get(String name)` — Get service tanpa type check
+- `isRegistered(String name)` — Cek apakah service terdaftar
+- `unregister(String name)` — Hapus service
+
+### Subcommand Framework
+
+Framework untuk membuat subcommand dengan mudah tanpa manual parsing.
+
+```java
+@ModuleInfo(name = "myplugin", version = "1.0.0")
+public class MyModule implements OrynModule {
+
+    private SubcommandHandler handler;
+
+    @Override
+    public boolean onLoad(ModuleContext context) {
+        handler = new SubcommandHandler("myplugin", "My plugin commands");
+
+        // Register subcommand dengan lambda
+        handler.register("reload", "Reload configuration", (sender, args) -> {
+            context.getConfigManager().reload();
+            sender.sendMessage("Config reloaded!");
+        });
+
+        // Register subcommand dengan tab completion
+        handler.register("give", "Give item to player", this::handleGive, this::tabGive);
+
+        return true;
+    }
+
+    @Override
+    public boolean onCommand(CommandSender sender, String label, String[] args) {
+        return handler.execute(sender, args);
+    }
+
+    @Override
+    public List<String> onTabComplete(CommandSender sender, String label, String[] args) {
+        return handler.tabComplete(sender, args);
+    }
+
+    private void handleGive(CommandSender sender, String[] args) {
+        if (args.length < 2) {
+            sender.sendMessage("Usage: /myplugin give <player> <item>");
+            return;
+        }
+        Player target = Bukkit.getPlayer(args[0]);
+        if (target == null) {
+            sender.sendMessage("Player not found!");
+            return;
+        }
+        // Give item logic...
+    }
+
+    private List<String> tabGive(CommandSender sender, String[] args) {
+        if (args.length == 1) {
+            return Bukkit.getOnlinePlayers().stream()
+                .map(Player::getName)
+                .filter(name -> name.startsWith(args[0]))
+                .collect(Collectors.toList());
+        }
+        if (args.length == 2) {
+            return List.of("diamond", "emerald", "iron_ingot");
+        }
+        return List.of();
+    }
+}
+```
+
+### Broadcast Helpers
+
+Kirim pesan ke semua player atau player dengan permission tertentu.
+
+```java
+@Override
+public void onEnable() {
+    // Broadcast ke semua player
+    context.broadcast(Component.text("Server restarted!", NamedTextColor.GREEN));
+
+    // Broadcast ke semua player (string)
+    context.broadcast("§aServer restarted!");
+
+    // Broadcast ke player dengan permission
+    context.broadcastPermission(
+        Component.text("Admin alert: System maintenance at 3AM", NamedTextColor.RED),
+        "oryn.admin"
+    );
+}
+```
+
+### Resource Management
+
+Load dan save resources dari module JAR ke data folder.
+
+```java
+@Override
+public boolean onLoad(ModuleContext context) {
+    // Save default config dari JAR ke data folder (jika belum ada)
+    context.saveResource("config.yml", false);
+
+    // Force replace config
+    context.saveResource("config.yml", true);
+
+    // Load resource sebagai InputStream
+    try (InputStream in = context.getResource("templates/default.yml")) {
+        // Process resource...
+    }
+
+    return true;
+}
+```
+
+### Module Interaction
+
+Akses module lain dari context.
+
+```java
+@Override
+public boolean onLoad(ModuleContext context) {
+    // Cek apakah module lain enabled
+    if (context.isModuleEnabled("vault-bridge")) {
+        context.getLogger().info("Vault bridge is available!");
+    }
+
+    // Dapatkan module lain
+    OrynModule vault = context.getModule("vault-bridge");
+    if (vault != null) {
+        // Interaksi dengan module
+    }
+
+    // Cek status module
+    ModuleStatus status = context.getModuleStatus("vault-bridge");
+    if (status == ModuleStatus.ENABLED) {
+        // Module aktif
+    }
+
+    return true;
+}
+```
+
+### Auto Event Unregister
+
+Event listeners yang didaftarkan via `registerEvents()` otomatis di-unregister saat module di-disable. Tidak perlu manual unregister di `onDisable()`.
+
+```java
+public class MyModule implements OrynModule, Listener {
+
+    @Override
+    public boolean onLoad(ModuleContext context) {
+        // Event ini otomatis unregister saat module disable
+        context.registerEvents(this);
+        return true;
+    }
+
+    @EventHandler
+    public void onJoin(PlayerJoinEvent event) {
+        event.getPlayer().sendMessage("Welcome!");
+    }
+
+    // Tidak perlu onDisable() untuk unregister events!
+}
+```
 ## Troubleshooting
 
 ### Module tidak di-load

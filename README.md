@@ -21,7 +21,7 @@ Module host plugin for Oryn server. Loads and manages modules from `plugins/Oryn
 
 ## Installation
 
-1. Download `OrynPlugins-1.0.1.jar` from [Releases](https://github.com/Fahry-a/OrynPlugins/releases)
+1. Download `OrynPlugins-1.2.0.jar` from [Releases](https://github.com/Fahry-a/OrynPlugins/releases)
 2. Place in `plugins/` folder
 3. Start server
 
@@ -91,7 +91,7 @@ repositories {
 }
 
 dependencies {
-    compileOnly("net.oryn.mc:orynplugins:1.1.0")
+    compileOnly("net.oryn.mc:orynplugins:1.2.0")
 }
 ```
 
@@ -131,7 +131,7 @@ repositories {
 }
 
 dependencies {
-    compileOnly("net.oryn.mc:orynplugins:1.1.0")
+    compileOnly("net.oryn.mc:orynplugins:1.2.0")
 }
 ```
 
@@ -177,13 +177,29 @@ OrynPlugins ClassLoader (host plugin)
 Module ClassLoader (module JAR)
 ```
 
+### Module API Features
+
+| Feature | Description |
+|---------|-------------|
+| Service Registry | Inter-module service discovery (`context.getServiceRegistry()`) |
+| Subcommand Framework | Built-in subcommand routing with tab completion (`SubcommandHandler`) |
+| Broadcast Helpers | Send messages to all players or by permission (`context.broadcast()`) |
+| Resource Management | Load/save resources from module JAR (`context.saveResource()`) |
+| Module Interaction | Access other modules at runtime (`context.getModule()`) |
+| Auto Event Unregister | Events auto-unregistered when module is disabled |
+| Lifecycle Events | Listen to other modules' lifecycle (`ModuleLifecycleEvent`) |
+| Config Validation | Validate config after load/reload (`ConfigValidator`) |
+| Config Reload Callbacks | React to config changes (`configManager.onReload()`) |
+| Dependency Resolution | Hard dependencies checked before module enable |
+| Topological Load Order | Modules loaded in dependency-first order |
+
 ## Building
 
 ```bash
 ./gradlew build
 ```
 
-Output: `build/libs/OrynPlugins-1.1.0.jar`
+Output: `build/libs/OrynPlugins-1.2.0.jar`
 
 ## Publishing
 
@@ -196,6 +212,25 @@ git push origin main
 ```
 
 ## Changelog
+
+### v1.2.0
+- Added `ModuleServiceRegistry` for inter-module service discovery
+- Added `SubcommandHandler` / `SubcommandExecutor` command framework
+- Added broadcast helpers (`broadcast`, `broadcastPermission`) to `ModuleContext`
+- Added `saveResource()` and `getResource()` from module classloader
+- Added `getModule()`, `isModuleEnabled()`, `getModuleStatus()` to `ModuleContext`
+- Added `ModuleLifecycleEvent` for cross-module lifecycle hooks
+- Added `ConfigValidator` for config validation after load/reload
+- Added config reload callbacks via `onReload()` on `ModuleConfigManager`
+- Added `Module-Name` manifest attribute support for hot-detect without loading class
+- Event listeners now auto-unregistered when module is disabled
+- Dependency resolution: hard dependencies checked before enable
+- Topological sort for module load order
+- Fixed classloader leak in `detectNewModules()`
+- Fixed `ModuleContext.getResource()` to use module classloader
+- Fixed `ModuleConfigManager.reload()` NPE when config not loaded
+- Migrated `OrynCommand` to Adventure Component API
+- Added `getModuleLoader()` to `ModuleContext`
 
 ### v1.1.0
 - Added `@ModuleInfo` annotation for metadata (alternative to getter methods)
