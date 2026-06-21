@@ -25,18 +25,11 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Build & Publish to Local Repo
+      - name: Build & Publish to Maven Repo
         run: ./gradlew clean build publish --no-daemon
-
-      - name: Upload to B2
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.B2_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.B2_APP_KEY }}
-          AWS_DEFAULT_REGION: us-east-005
-        run: |
-          aws s3 sync build/repo/ s3://maven-repo/ \
-            --endpoint-url https://s3.us-east-005.backblazeb2.com \
-            --no-progress
+          ORG_GRADLE_PROJECT_orynRepoUsername: ${{ secrets.ORYN_USERNAME }}
+          ORG_GRADLE_PROJECT_orynRepoPassword: ${{ secrets.ORYN_PASSWORD }}
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4

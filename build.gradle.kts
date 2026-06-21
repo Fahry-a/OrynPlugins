@@ -16,7 +16,6 @@ repositories {
 
 dependencies {
     compileOnly("io.papermc.paper:paper-api:1.21.1-R0.1-SNAPSHOT")
-    implementation("com.github.luben:zstd-jni:1.5.7-11")
 }
 
 java {
