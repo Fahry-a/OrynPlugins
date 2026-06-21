@@ -24,46 +24,22 @@ java {
 }
 
 publishing {
+    repositories {
+        maven {
+            name = "orynRepo"
+            url = uri("https://maven.oryn.my.id/releases")
+            credentials(PasswordCredentials::class)
+            authentication {
+                create<BasicAuthentication>("basic")
+            }
+        }
+    }
     publications {
         create<MavenPublication>("maven") {
             groupId = project.group.toString()
             artifactId = "orynplugins"
             version = project.version.toString()
-
             artifact(tasks.shadowJar)
-
-            pom {
-                name.set("OrynPlugins")
-                description.set("A Main Plugin For Oryn Server")
-                url.set("https://github.com/Fahry-a/OrynPlugins")
-
-                licenses {
-                    license {
-                        name.set("MIT License")
-                        url.set("https://opensource.org/licenses/MIT")
-                    }
-                }
-
-                developers {
-                    developer {
-                        id.set("Fahry-a")
-                        name.set("Fahry-a")
-                    }
-                }
-
-                scm {
-                    connection.set("scm:git:git://github.com/Fahry-a/OrynPlugins.git")
-                    developerConnection.set("scm:git:ssh://github.com/Fahry-a/OrynPlugins.git")
-                    url.set("https://github.com/Fahry-a/OrynPlugins")
-                }
-            }
-        }
-    }
-
-    repositories {
-        maven {
-            name = "LocalRepo"
-            url = uri(layout.buildDirectory.dir("repo"))
         }
     }
 }
