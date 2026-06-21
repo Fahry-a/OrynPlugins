@@ -1,0 +1,23 @@
+[versions]
+# Core
+kotlin = "2.0.0"
+java = "21"
+
+# Minecraft / Paper
+paper-api = "1.21.1-R0.1-SNAPSHOT"
+minecraft = "1.21.1"
+
+# Gradle plugins
+shadow = "9.4.2"
+run-paper = "3.0.2"
+
+[libraries]
+# Paper API (compile-only, provided by server at runtime)
+paper-api = { group = "io.papermc.paper", name = "paper-api", version.ref = "paper-api" }
+
+[plugins]
+# Shadow JAR — fat JAR packaging
+shadow = { id = "com.gradleup.shadow", version.ref = "shadow" }
+
+# run-paper — local dev server
+run-paper = { id = "xyz.jpenilla.run-paper", version.ref = "run-paper" }

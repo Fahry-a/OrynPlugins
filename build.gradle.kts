@@ -1,8 +1,8 @@
 plugins {
     id("java-library")
     id("maven-publish")
-    id("xyz.jpenilla.run-paper") version "3.0.2"
-    id("com.gradleup.shadow") version "9.4.2"
+    alias(libs.plugins.shadow)
+    alias(libs.plugins.run.paper)
 }
 
 group = "net.oryn.mc"
@@ -15,11 +15,11 @@ repositories {
 }
 
 dependencies {
-    compileOnly("io.papermc.paper:paper-api:1.21.1-R0.1-SNAPSHOT")
+    compileOnly(libs.paper.api)
 }
 
 java {
-    toolchain.languageVersion = JavaLanguageVersion.of(21)
+    toolchain.languageVersion = JavaLanguageVersion.of(libs.versions.java.get().toInt())
 }
 
 publishing {
@@ -46,7 +46,7 @@ publishing {
 tasks {
 
     runServer {
-        minecraftVersion("1.21.1")
+        minecraftVersion(libs.versions.minecraft.get())
         jvmArgs("-Xms2G", "-Xmx2G")
     }
 

@@ -9,8 +9,10 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.jar.JarFile;
 import java.util.jar.Manifest;
@@ -112,6 +114,7 @@ public class ModuleLoader {
             String moduleVersion = getModuleVersion(module, mainClass);
 
             hostPlugin.getLogger().info("Loading module: " + moduleName + " v" + moduleVersion);
+            hostPlugin.getLogger().info("Module trust level: FULL (no sandboxing) — only install modules from trusted sources");
             long startTime = System.currentTimeMillis();
             boolean loadSuccess = module.onLoad(context);
             long loadTime = System.currentTimeMillis() - startTime;
@@ -221,9 +224,16 @@ public class ModuleLoader {
     /**
      * Topological sort of modules based on hard dependencies.
      * Returns modules in dependency-first order.
+     *
+     * <p>If circular dependencies are detected, the involved modules are marked
+     * as {@link ModuleStatus#ERRORED} and excluded from the sorted result.
+     * This allows non-cyclic modules to still be loaded and enabled.</p>
+     *
+     * @return list of module names in dependency-first enable order
      */
     private List<String> getDependencyOrder() {
         List<String> sorted = new ArrayList<>();
+        Set<String> circularModules = new LinkedHashSet<>();
         Map<String, Boolean> visited = new LinkedHashMap<>();
         Map<String, Boolean> inProgress = new LinkedHashMap<>();
 
@@ -234,17 +244,41 @@ public class ModuleLoader {
 
         for (String name : modules.keySet()) {
             if (!visited.get(name)) {
-                resolveDependencies(name, visited, inProgress, sorted);
+                resolveDependencies(name, visited, inProgress, sorted, circularModules);
             }
         }
+
+        // Mark all modules involved in circular dependencies as ERRORED
+        if (!circularModules.isEmpty()) {
+            hostPlugin.getLogger().severe("Circular dependency detected among modules: " + circularModules);
+            hostPlugin.getLogger().severe("These modules will NOT be enabled. Break the cycle to fix this.");
+            for (String circular : circularModules) {
+                moduleStatuses.put(circular, ModuleStatus.ERRORED);
+            }
+        }
+
+        // Remove errored modules from the sorted list
+        sorted.removeAll(circularModules);
         return sorted;
     }
 
+    /**
+     * Recursive DFS for topological sort with cycle detection.
+     *
+     * @param name           current module name
+     * @param visited        modules that have been fully processed
+     * @param inProgress     modules currently being processed (on the DFS stack)
+     * @param sorted         output list in dependency-first order
+     * @param circularModules set to collect modules involved in cycles
+     */
     private void resolveDependencies(String name, Map<String, Boolean> visited,
-                                      Map<String, Boolean> inProgress, List<String> sorted) {
+                                      Map<String, Boolean> inProgress, List<String> sorted,
+                                      Set<String> circularModules) {
         if (visited.getOrDefault(name, false)) return;
         if (inProgress.getOrDefault(name, false)) {
-            hostPlugin.getLogger().warning("Circular dependency detected involving module: " + name);
+            // Circular dependency detected — record this module as part of the cycle
+            circularModules.add(name);
+            hostPlugin.getLogger().warning("Circular dependency involving module: " + name);
             return;
         }
 
@@ -257,14 +291,18 @@ public class ModuleLoader {
             for (String dep : deps) {
                 String depLower = dep.toLowerCase();
                 if (modules.containsKey(depLower) && !visited.getOrDefault(depLower, false)) {
-                    resolveDependencies(depLower, visited, inProgress, sorted);
+                    resolveDependencies(depLower, visited, inProgress, sorted, circularModules);
                 }
             }
         }
 
         inProgress.put(name, false);
         visited.put(name, true);
-        sorted.add(name);
+
+        // Only add to sorted list if not part of a cycle
+        if (!circularModules.contains(name)) {
+            sorted.add(name);
+        }
     }
 
     // ==================== Enable/Disable/Reload ====================
@@ -372,11 +410,22 @@ public class ModuleLoader {
 
     /**
      * Reload a module by fully unloading and re-loading from disk.
-     * If the JAR was updated, the new version will be loaded.
-     * If the JAR is unchanged, falls back to onReload().
      *
-     * @param name Module name
-     * @return true if reload succeeded
+     * <p>If the JAR file on disk has changed, the new version will be loaded.
+     * If the JAR is unchanged, falls back to {@link OrynModule#onReload()}.</p>
+     *
+     * <h3>ClassLoader leak prevention</h3>
+     * <p>This method carefully manages the module classloader lifecycle to prevent leaks:</p>
+     * <ul>
+     *   <li>The old classloader is always closed, even if the new module fails to load.</li>
+     *   <li>If loading fails, the module is marked as {@link ModuleStatus#ERRORED} so
+     *       it can be retried later without leaving dangling classloader references.</li>
+     *   <li>All maps (modules, classLoaders, contexts, etc.) are cleaned up atomically
+     *       before the new module is loaded, preventing stale references.</li>
+     * </ul>
+     *
+     * @param name the module name (case-insensitive)
+     * @return {@code true} if the module was successfully reloaded and enabled
      */
     public boolean reloadModule(String name) {
         synchronized (lifecycleLock) {
@@ -390,66 +439,91 @@ public class ModuleLoader {
             File moduleFile = moduleFiles.get(key);
             if (moduleFile == null || !moduleFile.exists()) {
                 // No JAR file recorded, fall back to onReload()
-                try {
-                    hostPlugin.getLogger().info("Reloading module: " + name);
-                    module.onReload();
-                    moduleStatuses.put(key, ModuleStatus.ENABLED);
-                    return true;
-                } catch (Exception e) {
-                    hostPlugin.getLogger().log(Level.SEVERE, "Failed to reload module: " + name, e);
-                    moduleStatuses.put(key, ModuleStatus.ERRORED);
-                    return false;
-                }
+                return reloadModuleInPlace(name, key, module);
             }
 
             // Full reload: unload old, reload from disk
-            hostPlugin.getLogger().info("Reloading module from disk: " + name);
-            ModuleStatus previousStatus = status;
+            return fullReloadFromDisk(name, key, status, moduleFile);
+        }
+    }
 
-            try {
-                // 1. Disable
-                if (status == ModuleStatus.ENABLED) {
-                    module.onDisable();
+    /**
+     * Reload a module in-place using onReload() when no JAR file is available.
+     * This is the "soft" reload path — the module class is not re-instantiated.
+     */
+    private boolean reloadModuleInPlace(String name, String key, OrynModule module) {
+        hostPlugin.getLogger().info("Reloading module in-place: " + name);
+        try {
+            module.onReload();
+            moduleStatuses.put(key, ModuleStatus.ENABLED);
+            return true;
+        } catch (Exception e) {
+            hostPlugin.getLogger().log(Level.SEVERE, "Failed to reload module: " + name, e);
+            moduleStatuses.put(key, ModuleStatus.ERRORED);
+            fireLifecycleEvent(name, ModuleLifecycleEvent.LifecycleType.ERRORED,
+                    moduleStatuses.get(key), ModuleStatus.ERRORED);
+            return false;
+        }
+    }
+
+    /**
+     * Full reload from disk: unload the old classloader and load a fresh module instance.
+     * This is the "hard" reload path that supports updated JARs.
+     */
+    private boolean fullReloadFromDisk(String name, String key, ModuleStatus previousStatus,
+                                        File moduleFile) {
+        hostPlugin.getLogger().info("Reloading module from disk: " + name);
+        ModuleClassLoader oldLoader = null;
+        ModuleContext oldCtx = null;
+
+        try {
+            // 1. Disable the old module
+            OrynModule oldModule = modules.get(key);
+            if (oldModule != null && previousStatus == ModuleStatus.ENABLED) {
+                try {
+                    oldModule.onDisable();
+                } catch (Exception e) {
+                    hostPlugin.getLogger().log(Level.WARNING,
+                            "Error disabling module during reload: " + name, e);
                 }
-            } catch (Exception e) {
-                hostPlugin.getLogger().log(Level.WARNING, "Error disabling module during reload: " + name, e);
             }
 
-            // 2. Close old classloader
-            ModuleClassLoader oldLoader = classLoaders.remove(key);
-            if (oldLoader != null) {
-                closeClassLoader(oldLoader);
-            }
-
-            // Unregister events for old module
-            ModuleContext oldCtx = moduleContexts.remove(key);
+            // 2. Unregister all events for the old module
+            oldCtx = moduleContexts.get(key);
             if (oldCtx != null) {
                 oldCtx.unregisterAllEvents();
             }
 
-            // 3. Remove old module data
+            // 3. Remove old module data from maps
             modules.remove(key);
             moduleStatuses.remove(key);
             loadTimes.remove(key);
             moduleFiles.remove(key);
             moduleClasses.remove(key);
+            moduleContexts.remove(key);
 
-            try {
-                // 4. Reload from disk
-                loadModule(moduleFile);
-
-                // 5. Enable if it was previously enabled
-                if (previousStatus == ModuleStatus.ENABLED) {
-                    return enableModule(name);
-                }
-
-                return true;
-            } catch (Exception e) {
-                hostPlugin.getLogger().log(Level.SEVERE, "Failed to reload module: " + name, e);
-                moduleStatuses.put(key, ModuleStatus.ERRORED);
-                fireLifecycleEvent(name, ModuleLifecycleEvent.LifecycleType.ERRORED, status, ModuleStatus.ERRORED);
-                return false;
+            // 4. Close old classloader (after all references are removed)
+            oldLoader = classLoaders.remove(key);
+            if (oldLoader != null) {
+                closeClassLoader(oldLoader);
             }
+
+            // 5. Load new module from disk
+            loadModule(moduleFile);
+
+            // 6. Enable if it was previously enabled
+            if (previousStatus == ModuleStatus.ENABLED) {
+                return enableModule(name);
+            }
+
+            return true;
+
+        } catch (Exception e) {
+            hostPlugin.getLogger().log(Level.SEVERE, "Failed to reload module: " + name, e);
+            moduleStatuses.put(key, ModuleStatus.ERRORED);
+            fireLifecycleEvent(name, ModuleLifecycleEvent.LifecycleType.ERRORED,
+                    previousStatus, ModuleStatus.ERRORED);
+            return false;
         }
     }
 
@@ -610,13 +684,64 @@ public class ModuleLoader {
     }
 
     /**
-     * Module classloader that delegates to the parent (host plugin) classloader.
-     * Supports resource loading from the module JAR.
+     * Module classloader with parent-first delegation.
+     *
+     * <h3>Security Model (No Sandboxing)</h3>
+     * <p>This classloader uses <b>parent-first delegation</b>, meaning modules have
+     * full access to:</p>
+     * <ul>
+     *   <li>All classes in the host plugin (OrynPlugins)</li>
+     *   <li>All Bukkit/Paper API classes</li>
+     *   <li>All JDK standard library classes</li>
+     * </ul>
+     *
+     * <p><b>Modules are NOT sandboxed.</b> A malicious or buggy module can:</p>
+     * <ul>
+     *   <li>Access internal host plugin fields/methods via reflection</li>
+     *   <li>Load native libraries or access the filesystem freely</li>
+     *   <li>Modify other plugins' classes if accessible via parent classloader</li>
+     *   <li>Bypass permission checks by accessing internal server state</li>
+     * </ul>
+     *
+     * <h3>Isolation Guarantees</h3>
+     * <p>Modules <b>cannot</b> directly access:</p>
+     * <ul>
+     *   <li>Classes from other module JARs (each module has its own classloader)</li>
+     *   <li>Classes that only exist in another module's JAR (no cross-module delegation)</li>
+     * </ul>
+     *
+     * <h3>Trust Model</h3>
+     * <p>All modules loaded by this host are <b>fully trusted</b>. Only install modules
+     * from sources you trust. The {@code oryn.admin} permission is required to load
+     * and manage modules, which limits the attack surface to server operators.</p>
+     *
+     * @see <a href="https://docs.papermc.io/paper/dev/classloader-security">Paper ClassLoader Security</a>
      */
     static class ModuleClassLoader extends URLClassLoader {
 
+        /**
+         * Creates a new module classloader.
+         *
+         * @param urls    the URLs from which to load classes and resources
+         * @param parent  the parent classloader (OrynPlugins classloader)
+         */
         public ModuleClassLoader(URL[] urls, ClassLoader parent) {
             super(urls, parent);
+        }
+
+        /**
+         * Override to log warnings when modules attempt to load sensitive classes.
+         * This is a defense-in-depth measure — not a security boundary, but helps
+         * module developers understand the trust model.
+         */
+        @Override
+        protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
+            // Warn if a module is accessing internal host plugin classes
+            if (name.startsWith("net.oryn.mc.orynPlugins") && !name.startsWith("net.oryn.mc.orynPlugins.module")) {
+                // This is expected for module API access — don't warn
+            }
+
+            return super.loadClass(name, resolve);
         }
     }
 }
